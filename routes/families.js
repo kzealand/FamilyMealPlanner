@@ -2,6 +2,7 @@ const express = require('express');
 const Joi = require('joi');
 const db = require('../config/database');
 const { authenticateToken, requireFamilyAccess, requireAdminRole } = require('../middleware/auth');
+const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
@@ -14,6 +15,12 @@ const createFamilySchema = Joi.object({
 const addMemberSchema = Joi.object({
   email: Joi.string().email().required(),
   role: Joi.string().valid('admin', 'member').default('member')
+});
+
+const inviteMemberSchema = Joi.object({
+  email: Joi.string().email().required(),
+  role: Joi.string().valid('admin', 'member').default('member'),
+  message: Joi.string().max(500).optional()
 });
 
 // Create a new family
@@ -271,6 +278,246 @@ router.delete('/:familyId/members/leave', authenticateToken, requireFamilyAccess
     res.json({ message: 'Successfully left the family' });
   } catch (error) {
     console.error('Leave family error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Delete family (admin only)
+router.delete('/:familyId', authenticateToken, requireFamilyAccess, requireAdminRole, async (req, res) => {
+  try {
+    const { familyId } = req.params;
+    const userId = req.user.id;
+
+    // Check if user is the creator or an admin
+    const familyResult = await db.query(
+      'SELECT created_by FROM families WHERE id = $1',
+      [familyId]
+    );
+
+    if (familyResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Family not found' });
+    }
+
+    const family = familyResult.rows[0];
+    
+    // Only the creator can delete the family
+    if (family.created_by !== userId) {
+      return res.status(403).json({ error: 'Only the family creator can delete the family' });
+    }
+
+    // Delete all related data (cascade will handle most, but we'll be explicit)
+    await db.query('DELETE FROM family_members WHERE family_id = $1', [familyId]);
+    await db.query('DELETE FROM recipes WHERE family_id = $1', [familyId]);
+    await db.query('DELETE FROM meal_plans WHERE family_id = $1', [familyId]);
+    await db.query('DELETE FROM shopping_lists WHERE family_id = $1', [familyId]);
+    await db.query('DELETE FROM families WHERE id = $1', [familyId]);
+
+    res.json({ message: 'Family deleted successfully' });
+  } catch (error) {
+    console.error('Delete family error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Invite member to family (admin only)
+router.post('/:familyId/invite', authenticateToken, requireFamilyAccess, requireAdminRole, async (req, res) => {
+  try {
+    const { error, value } = inviteMemberSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
+    }
+
+    const { familyId } = req.params;
+    const { email, role, message } = value;
+
+    // Check if user is already a member
+    const existingUser = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
+      const userId = existingUser.rows[0].id;
+      const existingMember = await db.query(
+        'SELECT id FROM family_members WHERE family_id = $1 AND user_id = $2',
+        [familyId, userId]
+      );
+
+      if (existingMember.rows.length > 0) {
+        return res.status(409).json({ error: 'User is already a member of this family' });
+      }
+    }
+
+    // Check if invitation already exists
+    const existingInvite = await db.query(
+      'SELECT id FROM family_invitations WHERE family_id = $1 AND email = $2 AND status = $3',
+      [familyId, email, 'pending']
+    );
+
+    if (existingInvite.rows.length > 0) {
+      return res.status(409).json({ error: 'Invitation already sent to this email' });
+    }
+
+    // Create invitation
+    const invitationToken = uuidv4();
+    const result = await db.query(
+      `INSERT INTO family_invitations (family_id, email, role, message, invitation_token, invited_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, invitation_token`,
+      [familyId, email, role, message, invitationToken, req.user.id]
+    );
+
+    const invitation = result.rows[0];
+
+    // In a real app, you would send an email here
+    // For now, we'll return the invitation token
+    res.status(201).json({
+      message: 'Invitation sent successfully',
+      invitation: {
+        id: invitation.id,
+        email,
+        role,
+        message,
+        invitation_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/invite/${invitation.invitation_token}`
+      }
+    });
+  } catch (error) {
+    console.error('Send invitation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get pending invitations for a family (admin only)
+router.get('/:familyId/invitations', authenticateToken, requireFamilyAccess, requireAdminRole, async (req, res) => {
+  try {
+    const { familyId } = req.params;
+
+    const result = await db.query(
+      `SELECT fi.id, fi.email, fi.role, fi.message, fi.created_at, fi.status,
+              u.first_name, u.last_name
+       FROM family_invitations fi
+       LEFT JOIN users u ON fi.email = u.email
+       WHERE fi.family_id = $1
+       ORDER BY fi.created_at DESC`,
+      [familyId]
+    );
+
+    res.json({ invitations: result.rows });
+  } catch (error) {
+    console.error('Get invitations error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Cancel invitation (admin only)
+router.delete('/:familyId/invitations/:invitationId', authenticateToken, requireFamilyAccess, requireAdminRole, async (req, res) => {
+  try {
+    const { familyId, invitationId } = req.params;
+
+    const result = await db.query(
+      'DELETE FROM family_invitations WHERE id = $1 AND family_id = $2 RETURNING id',
+      [invitationId, familyId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Invitation not found' });
+    }
+
+    res.json({ message: 'Invitation cancelled successfully' });
+  } catch (error) {
+    console.error('Cancel invitation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Accept invitation (public endpoint)
+router.post('/invite/:token/accept', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { userId } = req.body; // User must be logged in
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User must be logged in to accept invitation' });
+    }
+
+    // Find invitation
+    const invitationResult = await db.query(
+      'SELECT * FROM family_invitations WHERE invitation_token = $1 AND status = $2',
+      [token, 'pending']
+    );
+
+    if (invitationResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid or expired invitation' });
+    }
+
+    const invitation = invitationResult.rows[0];
+
+    // Check if user email matches invitation email
+    const userResult = await db.query('SELECT email FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (userResult.rows[0].email !== invitation.email) {
+      return res.status(403).json({ error: 'Invitation email does not match your account email' });
+    }
+
+    // Check if user is already a member
+    const existingMember = await db.query(
+      'SELECT id FROM family_members WHERE family_id = $1 AND user_id = $2',
+      [invitation.family_id, userId]
+    );
+
+    if (existingMember.rows.length > 0) {
+      return res.status(409).json({ error: 'You are already a member of this family' });
+    }
+
+    // Add user to family
+    await db.query(
+      'INSERT INTO family_members (family_id, user_id, role) VALUES ($1, $2, $3)',
+      [invitation.family_id, userId, invitation.role]
+    );
+
+    // Update invitation status
+    await db.query(
+      'UPDATE family_invitations SET status = $1, accepted_at = CURRENT_TIMESTAMP WHERE id = $2',
+      ['accepted', invitation.id]
+    );
+
+    res.json({ message: 'Invitation accepted successfully' });
+  } catch (error) {
+    console.error('Accept invitation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get invitation details (public endpoint)
+router.get('/invite/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const result = await db.query(
+      `SELECT fi.*, f.name as family_name, f.description as family_description
+       FROM family_invitations fi
+       JOIN families f ON fi.family_id = f.id
+       WHERE fi.invitation_token = $1 AND fi.status = $2`,
+      [token, 'pending']
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid or expired invitation' });
+    }
+
+    const invitation = result.rows[0];
+    res.json({
+      invitation: {
+        id: invitation.id,
+        email: invitation.email,
+        role: invitation.role,
+        message: invitation.message,
+        family_name: invitation.family_name,
+        family_description: invitation.family_description,
+        created_at: invitation.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Get invitation error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -40,6 +40,21 @@ CREATE TABLE family_members (
     UNIQUE(family_id, user_id)
 );
 
+-- Family invitations table
+CREATE TABLE family_invitations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    family_id UUID REFERENCES families(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'member')),
+    message TEXT,
+    invitation_token UUID NOT NULL UNIQUE,
+    invited_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'expired')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    accepted_at TIMESTAMP WITH TIME ZONE,
+    expires_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP + INTERVAL '7 days')
+);
+
 -- Recipes table
 CREATE TABLE recipes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -150,6 +165,9 @@ CREATE TABLE shopping_list_items (
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_family_members_family_id ON family_members(family_id);
 CREATE INDEX idx_family_members_user_id ON family_members(user_id);
+CREATE INDEX idx_family_invitations_token ON family_invitations(invitation_token);
+CREATE INDEX idx_family_invitations_family_id ON family_invitations(family_id);
+CREATE INDEX idx_family_invitations_email ON family_invitations(email);
 CREATE INDEX idx_recipes_family_id ON recipes(family_id);
 CREATE INDEX idx_recipe_ingredients_recipe_id ON recipe_ingredients(recipe_id);
 CREATE INDEX idx_meal_plans_user_family_week ON meal_plans(user_id, family_id, week_start_date);

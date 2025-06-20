@@ -100,6 +100,34 @@ export const familyAPI = {
   leave: async (familyId: string) => {
     await api.delete(`/families/${familyId}/members/leave`)
   },
+
+  delete: async (familyId: string) => {
+    await api.delete(`/families/${familyId}`)
+  },
+
+  // Invitation methods
+  inviteMember: async (familyId: string, data: { email: string; role?: string; message?: string }) => {
+    const response = await api.post(`/families/${familyId}/invite`, data)
+    return response.data.invitation
+  },
+
+  getInvitations: async (familyId: string) => {
+    const response = await api.get(`/families/${familyId}/invitations`)
+    return response.data.invitations
+  },
+
+  cancelInvitation: async (familyId: string, invitationId: string) => {
+    await api.delete(`/families/${familyId}/invitations/${invitationId}`)
+  },
+
+  getInvitationDetails: async (token: string) => {
+    const response = await api.get(`/families/invite/${token}`)
+    return response.data.invitation
+  },
+
+  acceptInvitation: async (token: string, userId: string) => {
+    await api.post(`/families/invite/${token}/accept`, { userId })
+  },
 }
 
 // Recipe API
@@ -134,6 +162,18 @@ export const recipeAPI = {
 
   toggleFavorite: async (familyId: string, recipeId: string) => {
     const response = await api.post(`/recipes/${familyId}/${recipeId}/favorite`)
+    return response.data
+  },
+
+  bulkImport: async (familyId: string, file: File) => {
+    const formData = new FormData()
+    formData.append('csvFile', file)
+    
+    const response = await api.post(`/recipes/${familyId}/bulk-import`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
     return response.data
   },
 }

@@ -1,9 +1,24 @@
 const express = require('express');
 const Joi = require('joi');
+const multer = require('multer');
+const csv = require('csv-parser');
+const fs = require('fs');
 const db = require('../config/database');
 const { authenticateToken, requireFamilyAccess } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Configure multer for file uploads
+const upload = multer({ 
+  dest: 'temp_uploads/',
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only CSV files are allowed'), false);
+    }
+  }
+});
 
 // Validation schemas
 const createRecipeSchema = Joi.object({
@@ -350,6 +365,152 @@ router.post('/:familyId/:recipeId/favorite', authenticateToken, requireFamilyAcc
     }
   } catch (error) {
     console.error('Toggle favorite error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Bulk import recipes from CSV
+router.post('/:familyId/bulk-import', authenticateToken, requireFamilyAccess, upload.single('csvFile'), async (req, res) => {
+  try {
+    const { familyId } = req.params;
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No CSV file uploaded' });
+    }
+
+    const results = [];
+    const errors = [];
+    let importedCount = 0;
+
+    // Parse CSV file
+    fs.createReadStream(req.file.path)
+      .pipe(csv())
+      .on('data', (data) => {
+        results.push(data);
+      })
+      .on('end', async () => {
+        try {
+          // Process each recipe
+          for (let i = 0; i < results.length; i++) {
+            const row = results[i];
+            try {
+              // Validate required fields
+              if (!row.name || !row.description || !row.cooking_instructions) {
+                errors.push(`Row ${i + 2}: Missing required fields (name, description, or cooking_instructions)`);
+                continue;
+              }
+
+              // Parse ingredients
+              const ingredients = [];
+              if (row.ingredients) {
+                const ingredientList = row.ingredients.split(',');
+                for (const ingredientStr of ingredientList) {
+                  const parts = ingredientStr.trim().split(':');
+                  if (parts.length === 3) {
+                    ingredients.push({
+                      name: parts[0].trim(),
+                      quantity: parseFloat(parts[1]),
+                      unit: parts[2].trim(),
+                      notes: ''
+                    });
+                  } else {
+                    errors.push(`Row ${i + 2}: Invalid ingredient format: ${ingredientStr}`);
+                  }
+                }
+              }
+
+              // Parse dietary tags
+              const dietaryTags = row.dietary_tags ? row.dietary_tags.split(',').map(tag => tag.trim()) : [];
+
+              // Create recipe
+              const recipeResult = await db.query(
+                `INSERT INTO recipes (family_id, name, description, image_url, prep_time_minutes, cook_time_minutes, 
+                  servings, cooking_instructions, star_rating, dietary_tags, created_by)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 RETURNING *`,
+                [
+                  familyId,
+                  row.name,
+                  row.description,
+                  row.image_url || null,
+                  parseInt(row.prep_time_minutes) || 0,
+                  parseInt(row.cook_time_minutes) || 0,
+                  parseInt(row.servings) || 1,
+                  row.cooking_instructions,
+                  parseInt(row.star_rating) || 3,
+                  dietaryTags,
+                  userId
+                ]
+              );
+
+              const recipe = recipeResult.rows[0];
+
+              // Add ingredients
+              for (const ingredient of ingredients) {
+                // Find or create ingredient
+                let ingredientResult = await db.query(
+                  'SELECT id FROM ingredients WHERE LOWER(name) = LOWER($1)',
+                  [ingredient.name]
+                );
+
+                let ingredientId;
+                if (ingredientResult.rows.length === 0) {
+                  const newIngredientResult = await db.query(
+                    'INSERT INTO ingredients (name, unit) VALUES ($1, $2) RETURNING id',
+                    [ingredient.name, ingredient.unit]
+                  );
+                  ingredientId = newIngredientResult.rows[0].id;
+                } else {
+                  ingredientId = ingredientResult.rows[0].id;
+                }
+
+                // Add recipe ingredient
+                await db.query(
+                  'INSERT INTO recipe_ingredients (recipe_id, ingredient_id, quantity, unit, notes) VALUES ($1, $2, $3, $4, $5)',
+                  [recipe.id, ingredientId, ingredient.quantity, ingredient.unit, ingredient.notes]
+                );
+              }
+
+              importedCount++;
+            } catch (error) {
+              console.error(`Error importing recipe at row ${i + 2}:`, error);
+              errors.push(`Row ${i + 2}: ${error.message}`);
+            }
+          }
+
+          // Clean up uploaded file
+          fs.unlinkSync(req.file.path);
+
+          res.json({
+            message: `Bulk import completed. ${importedCount} recipes imported successfully.`,
+            imported_count: importedCount,
+            total_recipes: results.length,
+            errors: errors
+          });
+        } catch (error) {
+          console.error('Bulk import error:', error);
+          // Clean up uploaded file
+          if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+          }
+          res.status(500).json({ error: 'Internal server error during bulk import' });
+        }
+      })
+      .on('error', (error) => {
+        console.error('CSV parsing error:', error);
+        // Clean up uploaded file
+        if (req.file && fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+        res.status(400).json({ error: 'Invalid CSV file format' });
+      });
+  } catch (error) {
+    console.error('Bulk import error:', error);
+    // Clean up uploaded file
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });

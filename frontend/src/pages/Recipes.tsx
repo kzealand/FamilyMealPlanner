@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { recipeAPI, familyAPI } from '@/services/api'
 import { Recipe, Family } from '@/types'
-import { Search, Plus, Star, Clock, Users, Heart, Edit, Trash2, Eye } from 'lucide-react'
+import { Search, Plus, Star, Clock, Users, Heart, Edit, Trash2, Eye, Upload } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { ChangeEvent, FormEvent } from 'react'
 
@@ -38,6 +38,10 @@ export default function Recipes() {
   const [editError, setEditError] = useState('')
   const [showViewModal, setShowViewModal] = useState(false)
   const [viewRecipe, setViewRecipe] = useState<Recipe | null>(null)
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false)
+  const [bulkImportFile, setBulkImportFile] = useState<File | null>(null)
+  const [bulkImportLoading, setBulkImportLoading] = useState(false)
+  const [bulkImportError, setBulkImportError] = useState('')
 
   // Load families and recipes on component mount
   useEffect(() => {
@@ -363,6 +367,58 @@ export default function Recipes() {
     setShowViewModal(true)
   }
 
+  const handleBulkImport = async (e: FormEvent) => {
+    e.preventDefault()
+    setBulkImportError('')
+    
+    if (!currentFamily) {
+      setBulkImportError('No family selected')
+      return
+    }
+    
+    if (!bulkImportFile) {
+      setBulkImportError('Please select a CSV file')
+      return
+    }
+
+    try {
+      setBulkImportLoading(true)
+      const result = await recipeAPI.bulkImport(currentFamily.id, bulkImportFile)
+      
+      toast.success(`Successfully imported ${result.imported_count} recipes!`)
+      
+      if (result.errors && result.errors.length > 0) {
+        console.warn('Import errors:', result.errors)
+        toast.error(`${result.errors.length} recipes had errors. Check console for details.`)
+      }
+      
+      // Reload recipes
+      loadRecipes()
+      
+      // Reset form
+      setBulkImportFile(null)
+      setShowBulkImportModal(false)
+    } catch (error: any) {
+      console.error('Bulk import error:', error)
+      setBulkImportError(error.response?.data?.error || 'Failed to import recipes')
+    } finally {
+      setBulkImportLoading(false)
+    }
+  }
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
+        setBulkImportFile(file)
+        setBulkImportError('')
+      } else {
+        setBulkImportError('Please select a valid CSV file')
+        setBulkImportFile(null)
+      }
+    }
+  }
+
   // Show message if no family is available
   if (families.length === 0 && !loading) {
     return (
@@ -427,13 +483,22 @@ export default function Recipes() {
             </p>
           )}
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="btn btn-primary"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Add Recipe
-        </button>
+        <div className="flex space-x-3">
+          <button
+            onClick={() => setShowBulkImportModal(true)}
+            className="btn btn-secondary"
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            Bulk Import
+          </button>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="btn btn-primary"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Add Recipe
+          </button>
+        </div>
       </div>
 
       {/* Family Selector */}
@@ -879,6 +944,72 @@ export default function Recipes() {
             <div className="flex justify-end mt-4">
               <button onClick={() => { setShowViewModal(false); setViewRecipe(null); }} className="btn btn-secondary">Close</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Import Modal */}
+      {showBulkImportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+            <h2 className="text-xl font-bold mb-4">Bulk Import Recipes</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Upload a CSV file to import multiple recipes at once. 
+              <a 
+                href="/recipe_import_template.csv" 
+                download 
+                className="text-primary-600 hover:text-primary-700 ml-1 underline"
+              >
+                Download template
+              </a>
+            </p>
+            
+            <form onSubmit={handleBulkImport}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select CSV File
+                </label>
+                <input
+                  type="file"
+                  accept=".csv"
+                  onChange={handleFileChange}
+                  className="input w-full"
+                  required
+                />
+                {bulkImportFile && (
+                  <p className="text-sm text-green-600 mt-1">
+                    Selected: {bulkImportFile.name}
+                  </p>
+                )}
+              </div>
+
+              {bulkImportError && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                  {bulkImportError}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button 
+                  type="button" 
+                  onClick={() => { 
+                    setShowBulkImportModal(false); 
+                    setBulkImportFile(null); 
+                    setBulkImportError(''); 
+                  }} 
+                  className="btn btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="btn btn-primary" 
+                  disabled={bulkImportLoading || !bulkImportFile}
+                >
+                  {bulkImportLoading ? 'Importing...' : 'Import Recipes'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

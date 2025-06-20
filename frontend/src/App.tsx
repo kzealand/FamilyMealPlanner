@@ -40,6 +40,7 @@ function AppRoutes() {
         </ProtectedRoute>
       }>
         <Route index element={<Dashboard />} />
+        <Route path="dashboard" element={<Dashboard />} />
         <Route path="recipes" element={<Recipes />} />
         <Route path="meal-planner" element={<MealPlanner />} />
         <Route path="shopping-list" element={<ShoppingList />} />

@@ -1,12 +1,106 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ChefHat, Calendar, ShoppingCart, Users } from 'lucide-react'
+import { recipeAPI, familyAPI } from '@/services/api'
+import { useAuth } from '@/contexts/AuthContext'
+
+interface DashboardStats {
+  totalRecipes: number
+  weeklyMeals: number
+  shoppingItems: number
+  familyMembers: number
+}
 
 export default function Dashboard() {
+  const [stats, setStats] = useState<DashboardStats>({
+    totalRecipes: 0,
+    weeklyMeals: 0,
+    shoppingItems: 0,
+    familyMembers: 0
+  })
+  const [loading, setLoading] = useState(true)
+  const navigate = useNavigate()
+  const { user } = useAuth()
+
+  console.log('Dashboard rendering, user:', user, 'loading:', loading)
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        console.log('Fetching dashboard data...')
+        setLoading(true)
+        
+        // Fetch user's families first
+        const families = await familyAPI.getAll()
+        console.log('Families fetched:', families)
+        const userFamilies = families.filter((family: any) => 
+          family.members.some((member: any) => member.user_id === user?.id)
+        )
+        console.log('User families:', userFamilies)
+        
+        // Fetch recipes for all user's families
+        let totalRecipes = 0
+        for (const family of userFamilies) {
+          try {
+            const recipes = await recipeAPI.getAll(family.id)
+            console.log(`Recipes for family ${family.id}:`, recipes)
+            totalRecipes += recipes.length
+          } catch (error) {
+            console.error(`Error fetching recipes for family ${family.id}:`, error)
+          }
+        }
+
+        const familyMembers = userFamilies.reduce((total: number, family: any) => 
+          total + family.members.length, 0
+        )
+
+        // For now, use placeholder data for meals and shopping items
+        // These would be implemented with actual API endpoints
+        const weeklyMeals = 0 // TODO: Implement meal plans API
+        const shoppingItems = 0 // TODO: Implement shopping list API
+
+        const newStats = {
+          totalRecipes,
+          weeklyMeals,
+          shoppingItems,
+          familyMembers
+        }
+        console.log('Setting stats:', newStats)
+        setStats(newStats)
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    if (user) {
+      fetchDashboardData()
+    }
+  }, [user])
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Welcome to your family meal planning dashboard
+          </p>
+        </div>
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Welcome to your family meal planning dashboard
+          Welcome back, {user?.first_name}! Here's what's happening with your meal planning.
         </p>
       </div>
 
@@ -22,7 +116,7 @@ export default function Dashboard() {
                   <dt className="text-sm font-medium text-gray-500 truncate">
                     Total Recipes
                   </dt>
-                  <dd className="text-lg font-medium text-gray-900">12</dd>
+                  <dd className="text-lg font-medium text-gray-900">{stats.totalRecipes}</dd>
                 </dl>
               </div>
             </div>
@@ -40,7 +134,7 @@ export default function Dashboard() {
                   <dt className="text-sm font-medium text-gray-500 truncate">
                     This Week's Meals
                   </dt>
-                  <dd className="text-lg font-medium text-gray-900">8</dd>
+                  <dd className="text-lg font-medium text-gray-900">{stats.weeklyMeals}</dd>
                 </dl>
               </div>
             </div>
@@ -58,7 +152,7 @@ export default function Dashboard() {
                   <dt className="text-sm font-medium text-gray-500 truncate">
                     Shopping Items
                   </dt>
-                  <dd className="text-lg font-medium text-gray-900">24</dd>
+                  <dd className="text-lg font-medium text-gray-900">{stats.shoppingItems}</dd>
                 </dl>
               </div>
             </div>
@@ -76,7 +170,7 @@ export default function Dashboard() {
                   <dt className="text-sm font-medium text-gray-500 truncate">
                     Family Members
                   </dt>
-                  <dd className="text-lg font-medium text-gray-900">3</dd>
+                  <dd className="text-lg font-medium text-gray-900">{stats.familyMembers}</dd>
                 </dl>
               </div>
             </div>
@@ -90,7 +184,10 @@ export default function Dashboard() {
             Quick Actions
           </h3>
           <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <button className="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-primary-500">
+            <button 
+              onClick={() => navigate('/recipes')}
+              className="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-primary-500"
+            >
               <ChefHat className="h-6 w-6 text-primary-600" />
               <div className="flex-1 min-w-0">
                 <span className="absolute inset-0" aria-hidden="true" />
@@ -99,7 +196,10 @@ export default function Dashboard() {
               </div>
             </button>
 
-            <button className="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-primary-500">
+            <button 
+              onClick={() => navigate('/meal-planner')}
+              className="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-primary-500"
+            >
               <Calendar className="h-6 w-6 text-primary-600" />
               <div className="flex-1 min-w-0">
                 <span className="absolute inset-0" aria-hidden="true" />
@@ -108,7 +208,10 @@ export default function Dashboard() {
               </div>
             </button>
 
-            <button className="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-primary-500">
+            <button 
+              onClick={() => navigate('/shopping-list')}
+              className="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-primary-500"
+            >
               <ShoppingCart className="h-6 w-6 text-primary-600" />
               <div className="flex-1 min-w-0">
                 <span className="absolute inset-0" aria-hidden="true" />
