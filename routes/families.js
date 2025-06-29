@@ -3,6 +3,7 @@ const Joi = require('joi');
 const db = require('../config/database');
 const { authenticateToken, requireFamilyAccess, requireAdminRole } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcrypt');
 
 const router = express.Router();
 
@@ -21,6 +22,65 @@ const inviteMemberSchema = Joi.object({
   email: Joi.string().email().required(),
   role: Joi.string().valid('admin', 'member').default('member'),
   message: Joi.string().max(500).optional()
+});
+
+// Get all test users (development only) - Must be before parameterized routes
+router.get('/test-users', authenticateToken, async (req, res) => {
+  try {
+    // Only allow in development environment
+    if (process.env.NODE_ENV !== 'development') {
+      return res.status(403).json({ error: 'This endpoint is only available in development' });
+    }
+
+    // Get all users with "TestUser" as last name (our test user pattern)
+    const result = await db.query(
+      `SELECT id, email, first_name, last_name, created_at
+       FROM users 
+       WHERE last_name = 'TestUser'
+       ORDER BY created_at DESC`
+    );
+
+    res.json({ 
+      testUsers: result.rows,
+      note: 'These are test users created for invitation testing. Password is always "test123456"'
+    });
+  } catch (error) {
+    console.error('Get test users error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Delete test user (development only) - Must be before parameterized routes
+router.delete('/test-users/:userId', authenticateToken, async (req, res) => {
+  try {
+    // Only allow in development environment
+    if (process.env.NODE_ENV !== 'development') {
+      return res.status(403).json({ error: 'This endpoint is only available in development' });
+    }
+
+    const { userId } = req.params;
+
+    // Verify this is actually a test user
+    const userCheck = await db.query(
+      'SELECT id, email, last_name FROM users WHERE id = $1 AND last_name = $2',
+      [userId, 'TestUser']
+    );
+
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Test user not found' });
+    }
+
+    // Delete the test user (cascade will handle related records)
+    await db.query('DELETE FROM users WHERE id = $1', [userId]);
+
+    res.json({ 
+      message: 'Test user deleted successfully',
+      deletedUser: userCheck.rows[0]
+    });
+  } catch (error) {
+    console.error('Delete test user error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Create a new family
@@ -109,6 +169,9 @@ router.get('/:familyId', authenticateToken, requireFamilyAccess, async (req, res
        ORDER BY fm.joined_at ASC`,
       [familyId]
     );
+
+    // Debug log
+    console.log('Family details response:', { family, members: membersResult.rows });
 
     res.json({
       family,
@@ -365,9 +428,49 @@ router.post('/:familyId/invite', authenticateToken, requireFamilyAccess, require
 
     const invitation = result.rows[0];
 
+    // DEVELOPMENT FEATURE: Create test user account for invitations
+    // This helps test the full workflow during development
+    let testUserCreated = false;
+    let testUserCredentials = null;
+    
+    if (process.env.NODE_ENV === 'development' && !existingUser.rows.length) {
+      try {
+        // Generate a test password (simple for development)
+        const testPassword = 'test123456';
+        const saltRounds = 12;
+        const passwordHash = await bcrypt.hash(testPassword, saltRounds);
+        
+        // Extract name from email for test user
+        const emailName = email.split('@')[0];
+        const firstName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
+        const lastName = 'TestUser';
+        
+        // Create test user
+        const userResult = await db.query(
+          `INSERT INTO users (email, password_hash, first_name, last_name, dietary_restrictions, nutrition_targets, favorite_foods)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING id, email, first_name, last_name`,
+          [email, passwordHash, firstName, lastName, [], {}, []]
+        );
+        
+        testUserCreated = true;
+        testUserCredentials = {
+          email: email,
+          password: testPassword,
+          firstName: firstName,
+          lastName: lastName
+        };
+        
+        console.log(`🧪 Created test user account for invitation: ${email} (Password: ${testPassword})`);
+      } catch (userError) {
+        console.error('Failed to create test user account:', userError);
+        // Don't fail the invitation if test user creation fails
+      }
+    }
+
     // In a real app, you would send an email here
     // For now, we'll return the invitation token
-    res.status(201).json({
+    const response = {
       message: 'Invitation sent successfully',
       invitation: {
         id: invitation.id,
@@ -376,7 +479,18 @@ router.post('/:familyId/invite', authenticateToken, requireFamilyAccess, require
         message,
         invitation_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/invite/${invitation.invitation_token}`
       }
-    });
+    };
+
+    // Add test user credentials to response in development
+    if (testUserCreated && testUserCredentials) {
+      response.testUser = {
+        message: 'Test user account created for development',
+        credentials: testUserCredentials,
+        note: 'Use these credentials to log in and test the invitation acceptance flow'
+      };
+    }
+
+    res.status(201).json(response);
   } catch (error) {
     console.error('Send invitation error:', error);
     res.status(500).json({ error: 'Internal server error' });

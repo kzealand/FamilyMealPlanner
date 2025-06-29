@@ -65,6 +65,11 @@ export const authAPI = {
     const response = await api.put('/auth/profile', data)
     return response.data.user as User
   },
+
+  changePassword: async (data: { current_password: string; new_password: string }) => {
+    const response = await api.put('/auth/change-password', data)
+    return response.data
+  },
 }
 
 // Family API
@@ -128,6 +133,17 @@ export const familyAPI = {
   acceptInvitation: async (token: string, userId: string) => {
     await api.post(`/families/invite/${token}/accept`, { userId })
   },
+
+  // Development only - get test users
+  getTestUsers: async () => {
+    const response = await api.get('/families/test-users')
+    return response.data
+  },
+
+  // Development only - delete test user
+  deleteTestUser: async (userId: string) => {
+    await api.delete(`/families/test-users/${userId}`)
+  },
 }
 
 // Recipe API
@@ -180,27 +196,20 @@ export const recipeAPI = {
 
 // Meal Plan API
 export const mealPlanAPI = {
-  create: async (familyId: string, userId: string, data: CreateMealPlanRequest) => {
-    const response = await api.post(`/meal-plans/${familyId}/${userId}`, data)
+  create: async (data: CreateMealPlanRequest) => {
+    const response = await api.post('/meal-plans', data)
     return response.data.meal_plan as MealPlan
   },
 
-  getByUser: async (familyId: string, userId: string, weekStartDate: string) => {
-    const response = await api.get(`/meal-plans/${familyId}/${userId}`, {
+  getByWeek: async (weekStartDate: string) => {
+    const response = await api.get('/meal-plans', {
       params: { week_start_date: weekStartDate }
     })
     return response.data.meal_plan as MealPlan
   },
 
-  getAllForFamily: async (familyId: string, weekStartDate: string) => {
-    const response = await api.get(`/meal-plans/${familyId}`, {
-      params: { week_start_date: weekStartDate }
-    })
-    return response.data.meal_plans as MealPlan[]
-  },
-
-  delete: async (familyId: string, userId: string, weekStartDate: string) => {
-    await api.delete(`/meal-plans/${familyId}/${userId}`, {
+  delete: async (weekStartDate: string) => {
+    await api.delete('/meal-plans', {
       params: { week_start_date: weekStartDate }
     })
   },

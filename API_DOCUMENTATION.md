@@ -106,6 +106,27 @@ Authorization: Bearer <token>
 }
 ```
 
+#### Change Password
+```http
+PUT /auth/change-password
+Authorization: Bearer <token>
+```
+
+**Request Body:**
+```json
+{
+  "current_password": "oldpassword123",
+  "new_password": "newpassword123"
+}
+```
+
+**Response:**
+```json
+{
+  "message": "Password changed successfully"
+}
+```
+
 ### Family Management
 
 #### Create Family

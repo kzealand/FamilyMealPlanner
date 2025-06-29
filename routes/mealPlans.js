@@ -1,7 +1,7 @@
 const express = require('express');
 const Joi = require('joi');
 const db = require('../config/database');
-const { authenticateToken, requireFamilyAccess, requireAdminRole } = require('../middleware/auth');
+const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -27,53 +27,55 @@ const updateMealPlanSchema = Joi.object({
   })).min(1).required()
 });
 
-// Create or update meal plan for a user
-router.post('/:familyId/:userId', authenticateToken, requireFamilyAccess, async (req, res) => {
+// Create or update meal plan for the authenticated user
+router.post('/', authenticateToken, async (req, res) => {
   try {
     const { error, value } = createMealPlanSchema.validate(req.body);
     if (error) {
       return res.status(400).json({ error: error.details[0].message });
     }
 
-    const { familyId, userId } = req.params;
-    const currentUserId = req.user.id;
+    const userId = req.user.id;
     const { week_start_date, meals } = value;
-
-    // Check if user can edit this meal plan
-    if (userId !== currentUserId && req.familyRole !== 'admin') {
-      return res.status(403).json({ error: 'Only admins can edit other users\' meal plans' });
-    }
-
-    // Check if target user is a family member
-    const targetUserMember = await db.query(
-      'SELECT id FROM family_members WHERE family_id = $1 AND user_id = $2',
-      [familyId, userId]
-    );
-
-    if (targetUserMember.rows.length === 0) {
-      return res.status(404).json({ error: 'Target user is not a member of this family' });
-    }
+    console.log('POST /meal-plans:', { received_week_start_date: week_start_date });
 
     // Check if meal plan already exists for this week
+    console.log('Looking for existing meal plan with user_id:', userId, 'week_start_date:', week_start_date);
+    
+    // Convert the date to YYYY-MM-DD format for database comparison
+    const weekStartDateStr = week_start_date.toISOString().split('T')[0];
+    console.log('Converted week_start_date to string:', weekStartDateStr);
+    
     const existingPlan = await db.query(
-      'SELECT id FROM meal_plans WHERE user_id = $1 AND family_id = $2 AND week_start_date = $3',
-      [userId, familyId, week_start_date]
+      'SELECT id FROM meal_plans WHERE user_id = $1 AND week_start_date::date = $2::date',
+      [userId, weekStartDateStr]
     );
+    console.log('Existing plan query result:', existingPlan.rows);
 
     let mealPlanId;
     if (existingPlan.rows.length > 0) {
       // Update existing plan
       mealPlanId = existingPlan.rows[0].id;
+      console.log('Found existing meal plan, updating ID:', mealPlanId);
       
       // Clear existing meals
-      await db.query('DELETE FROM meal_plan_items WHERE meal_plan_id = $1', [mealPlanId]);
+      console.log('Deleting existing meal plan items for meal plan ID:', mealPlanId);
+      const deleteResult = await db.query('DELETE FROM meal_plan_items WHERE meal_plan_id = $1', [mealPlanId]);
+      console.log('Deleted', deleteResult.rowCount, 'existing meal plan items');
     } else {
       // Create new plan
-      const planResult = await db.query(
-        'INSERT INTO meal_plans (user_id, family_id, week_start_date) VALUES ($1, $2, $3) RETURNING id',
-        [userId, familyId, week_start_date]
-      );
-      mealPlanId = planResult.rows[0].id;
+      console.log('No existing meal plan found, creating new one');
+      try {
+        const result = await db.query(
+          'INSERT INTO meal_plans (user_id, week_start_date) VALUES ($1, $2) RETURNING id',
+          [userId, weekStartDateStr] // Use the string date instead of the Date object
+        );
+        mealPlanId = result.rows[0].id;
+        console.log('Created new meal plan with ID:', mealPlanId);
+      } catch (error) {
+        console.error('Create meal plan error:', error);
+        return res.status(500).json({ error: 'Failed to create meal plan' });
+      }
     }
 
     // Get meal slot IDs
@@ -87,30 +89,47 @@ router.post('/:familyId/:userId', authenticateToken, requireFamilyAccess, async 
     for (const meal of meals) {
       const mealSlotId = mealSlotMap[meal.meal_slot_name];
       
+      console.log('Processing meal:', meal);
+      console.log('meal_slot_name:', meal.meal_slot_name);
+      console.log('mealSlotId:', mealSlotId);
+      console.log('mealSlotMap:', mealSlotMap);
+      
       if (!mealSlotId) {
         return res.status(400).json({ error: `Invalid meal slot: ${meal.meal_slot_name}` });
       }
 
-      // Validate recipe if provided
+      // Validate recipe if provided (check if user has access to it)
       if (meal.recipe_id) {
+        console.log('Validating recipe access for recipe_id:', meal.recipe_id);
         const recipeResult = await db.query(
-          'SELECT id FROM recipes WHERE id = $1 AND family_id = $2',
-          [meal.recipe_id, familyId]
+          `SELECT r.id FROM recipes r
+           JOIN family_members fm ON r.family_id = fm.family_id
+           WHERE r.id = $1 AND fm.user_id = $2`,
+          [meal.recipe_id, userId]
         );
         
+        console.log('Recipe validation result:', recipeResult.rows);
+        
         if (recipeResult.rows.length === 0) {
-          return res.status(400).json({ error: 'Recipe not found or does not belong to this family' });
+          console.log('Recipe validation failed - recipe not found or no access');
+          return res.status(400).json({ error: 'Recipe not found or you do not have access to it' });
         }
       }
 
-      await db.query(
-        'INSERT INTO meal_plan_items (meal_plan_id, meal_slot_id, recipe_id, custom_meal_name, notes, day_of_week) VALUES ($1, $2, $3, $4, $5, $6)',
-        [mealPlanId, mealSlotId, meal.recipe_id || null, meal.custom_meal_name || null, meal.notes || null, meal.day_of_week]
-      );
+      try {
+        const insertResult = await db.query(
+          'INSERT INTO meal_plan_items (meal_plan_id, meal_slot_id, recipe_id, custom_meal_name, notes, day_of_week) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+          [mealPlanId, mealSlotId, meal.recipe_id || null, meal.custom_meal_name || null, meal.notes || null, meal.day_of_week]
+        );
+        console.log('Successfully inserted meal plan item for day', meal.day_of_week, 'meal slot', meal.meal_slot_name, 'with ID:', insertResult.rows[0].id);
+      } catch (insertError) {
+        console.error('Error inserting meal plan item:', insertError);
+        throw insertError;
+      }
     }
 
     // Get the complete meal plan
-    const completePlan = await getMealPlanWithDetails(mealPlanId, familyId);
+    const completePlan = await getMealPlanWithDetails(mealPlanId);
 
     res.status(201).json({
       message: existingPlan.rows.length > 0 ? 'Meal plan updated successfully' : 'Meal plan created successfully',
@@ -122,30 +141,21 @@ router.post('/:familyId/:userId', authenticateToken, requireFamilyAccess, async 
   }
 });
 
-// Get meal plan for a user
-router.get('/:familyId/:userId', authenticateToken, requireFamilyAccess, async (req, res) => {
+// Get meal plan for the authenticated user
+router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { familyId, userId } = req.params;
+    const userId = req.user.id;
     const { week_start_date } = req.query;
+    console.log('GET /meal-plans:', { received_week_start_date: week_start_date });
 
     if (!week_start_date) {
       return res.status(400).json({ error: 'week_start_date parameter is required' });
     }
 
-    // Check if target user is a family member
-    const targetUserMember = await db.query(
-      'SELECT id FROM family_members WHERE family_id = $1 AND user_id = $2',
-      [familyId, userId]
-    );
-
-    if (targetUserMember.rows.length === 0) {
-      return res.status(404).json({ error: 'Target user is not a member of this family' });
-    }
-
     // Get meal plan
     const planResult = await db.query(
-      'SELECT id FROM meal_plans WHERE user_id = $1 AND family_id = $2 AND week_start_date = $3',
-      [userId, familyId, week_start_date]
+      'SELECT id FROM meal_plans WHERE user_id = $1 AND week_start_date = $2',
+      [userId, week_start_date]
     );
 
     if (planResult.rows.length === 0) {
@@ -153,7 +163,7 @@ router.get('/:familyId/:userId', authenticateToken, requireFamilyAccess, async (
     }
 
     const mealPlanId = planResult.rows[0].id;
-    const completePlan = await getMealPlanWithDetails(mealPlanId, familyId);
+    const completePlan = await getMealPlanWithDetails(mealPlanId);
 
     res.json({ meal_plan: completePlan });
   } catch (error) {
@@ -162,70 +172,20 @@ router.get('/:familyId/:userId', authenticateToken, requireFamilyAccess, async (
   }
 });
 
-// Get all meal plans for a family (admin only)
-router.get('/:familyId', authenticateToken, requireFamilyAccess, requireAdminRole, async (req, res) => {
+// Delete meal plan for the authenticated user
+router.delete('/', authenticateToken, async (req, res) => {
   try {
-    const { familyId } = req.params;
+    const userId = req.user.id;
     const { week_start_date } = req.query;
 
     if (!week_start_date) {
       return res.status(400).json({ error: 'week_start_date parameter is required' });
-    }
-
-    // Get all meal plans for the family for the specified week
-    const plansResult = await db.query(
-      `SELECT mp.id, mp.user_id, mp.week_start_date, mp.created_at, mp.updated_at,
-              u.first_name, u.last_name
-       FROM meal_plans mp
-       JOIN users u ON mp.user_id = u.id
-       WHERE mp.family_id = $1 AND mp.week_start_date = $2
-       ORDER BY u.first_name, u.last_name`,
-      [familyId, week_start_date]
-    );
-
-    const mealPlans = [];
-    for (const plan of plansResult.rows) {
-      const completePlan = await getMealPlanWithDetails(plan.id, familyId);
-      mealPlans.push(completePlan);
-    }
-
-    res.json({ meal_plans: mealPlans });
-  } catch (error) {
-    console.error('Get family meal plans error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Delete meal plan
-router.delete('/:familyId/:userId', authenticateToken, requireFamilyAccess, async (req, res) => {
-  try {
-    const { familyId, userId } = req.params;
-    const { week_start_date } = req.query;
-    const currentUserId = req.user.id;
-
-    if (!week_start_date) {
-      return res.status(400).json({ error: 'week_start_date parameter is required' });
-    }
-
-    // Check if user can delete this meal plan
-    if (userId !== currentUserId && req.familyRole !== 'admin') {
-      return res.status(403).json({ error: 'Only admins can delete other users\' meal plans' });
-    }
-
-    // Check if target user is a family member
-    const targetUserMember = await db.query(
-      'SELECT id FROM family_members WHERE family_id = $1 AND user_id = $2',
-      [familyId, userId]
-    );
-
-    if (targetUserMember.rows.length === 0) {
-      return res.status(404).json({ error: 'Target user is not a member of this family' });
     }
 
     // Delete meal plan
     const result = await db.query(
-      'DELETE FROM meal_plans WHERE user_id = $1 AND family_id = $2 AND week_start_date = $3 RETURNING id',
-      [userId, familyId, week_start_date]
+      'DELETE FROM meal_plans WHERE user_id = $1 AND week_start_date = $2 RETURNING id',
+      [userId, week_start_date]
     );
 
     if (result.rows.length === 0) {
@@ -240,7 +200,7 @@ router.delete('/:familyId/:userId', authenticateToken, requireFamilyAccess, asyn
 });
 
 // Helper function to get meal plan with details
-async function getMealPlanWithDetails(mealPlanId, familyId) {
+async function getMealPlanWithDetails(mealPlanId) {
   // Get meal plan basic info
   const planResult = await db.query(
     `SELECT mp.id, mp.user_id, mp.week_start_date, mp.created_at, mp.updated_at,
@@ -270,6 +230,9 @@ async function getMealPlanWithDetails(mealPlanId, familyId) {
     [mealPlanId]
   );
 
+  console.log('Raw meal plan items from database:', mealsResult.rows);
+  console.log('Number of meal plan items found:', mealsResult.rows.length);
+
   // Organize meals by day
   const mealsByDay = {};
   for (let i = 0; i < 7; i++) {
@@ -277,6 +240,11 @@ async function getMealPlanWithDetails(mealPlanId, familyId) {
   }
 
   mealsResult.rows.forEach(meal => {
+    console.log('Processing meal from database:', meal);
+    console.log('meal.day_of_week:', meal.day_of_week);
+    console.log('meal.meal_slot_name:', meal.meal_slot_name);
+    console.log('mealsByDay[meal.day_of_week]:', mealsByDay[meal.day_of_week]);
+    
     if (!mealsByDay[meal.day_of_week][meal.meal_slot_name]) {
       mealsByDay[meal.day_of_week][meal.meal_slot_name] = {
         id: meal.id,
@@ -287,8 +255,13 @@ async function getMealPlanWithDetails(mealPlanId, familyId) {
         custom_meal_name: meal.custom_meal_name,
         notes: meal.notes
       };
+      console.log('Added meal to mealsByDay:', mealsByDay[meal.day_of_week][meal.meal_slot_name]);
+    } else {
+      console.log('Meal slot already exists, skipping:', meal.meal_slot_name);
     }
   });
+
+  console.log('Final mealsByDay structure:', mealsByDay);
 
   mealPlan.meals = mealsByDay;
   return mealPlan;

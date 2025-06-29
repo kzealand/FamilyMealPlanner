@@ -121,11 +121,10 @@ INSERT INTO meal_slots (name, display_order) VALUES
 CREATE TABLE meal_plans (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    family_id UUID REFERENCES families(id) ON DELETE CASCADE,
     week_start_date DATE NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, family_id, week_start_date)
+    UNIQUE(user_id, week_start_date)
 );
 
 -- Meal plan items table
@@ -170,7 +169,7 @@ CREATE INDEX idx_family_invitations_family_id ON family_invitations(family_id);
 CREATE INDEX idx_family_invitations_email ON family_invitations(email);
 CREATE INDEX idx_recipes_family_id ON recipes(family_id);
 CREATE INDEX idx_recipe_ingredients_recipe_id ON recipe_ingredients(recipe_id);
-CREATE INDEX idx_meal_plans_user_family_week ON meal_plans(user_id, family_id, week_start_date);
+CREATE INDEX idx_meal_plans_user_week ON meal_plans(user_id, week_start_date);
 CREATE INDEX idx_meal_plan_items_meal_plan_id ON meal_plan_items(meal_plan_id);
 CREATE INDEX idx_shopping_lists_family_week ON shopping_lists(family_id, week_start_date);
 

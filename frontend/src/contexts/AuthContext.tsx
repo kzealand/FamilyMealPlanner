@@ -63,7 +63,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const updateUser = async (data: Partial<User>) => {
     const updatedUser = await authAPI.updateProfile(data)
+    console.log('Backend returned updated user:', updatedUser)
+    console.log('Backend returned birthday:', updatedUser.birthday)
+    console.log('Backend returned birthday type:', typeof updatedUser.birthday)
     const newUser = { ...user, ...updatedUser }
+    console.log('Merged user data:', newUser)
+    console.log('Merged user birthday:', newUser.birthday)
     localStorage.setItem('user', JSON.stringify(newUser))
     setUser(newUser as User)
   }

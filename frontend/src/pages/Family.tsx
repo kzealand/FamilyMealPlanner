@@ -24,6 +24,8 @@ export default function Family() {
   const [success, setSuccess] = useState('')
   const [activeTab, setActiveTab] = useState<'members' | 'invitations'>('members')
   const [invitations, setInvitations] = useState<any[]>([])
+  const [testUsers, setTestUsers] = useState<any[]>([])
+  const [showTestUsers, setShowTestUsers] = useState(false)
 
   useEffect(() => {
     loadFamilies()
@@ -68,10 +70,19 @@ export default function Family() {
 
   const loadInvitations = async (familyId: string) => {
     try {
-      const invitationsData = await familyAPI.getInvitations(familyId)
-      setInvitations(invitationsData)
-    } catch (err) {
+      const invitations = await familyAPI.getInvitations(familyId)
+      setInvitations(invitations)
+    } catch (err: any) {
       console.error('Failed to load invitations:', err)
+    }
+  }
+
+  const loadTestUsers = async () => {
+    try {
+      const response = await familyAPI.getTestUsers()
+      setTestUsers(response.testUsers)
+    } catch (err: any) {
+      console.error('Failed to load test users:', err)
     }
   }
 
@@ -178,12 +189,18 @@ export default function Family() {
 
     try {
       setError('')
-      const invitation = await familyAPI.inviteMember(selectedFamily.id, inviteData)
+      const response = await familyAPI.inviteMember(selectedFamily.id, inviteData)
       setShowInviteForm(false)
       setInviteData({ email: '', role: 'member', message: '' })
       await loadInvitations(selectedFamily.id)
-      setSuccess(`Invitation sent to ${invitation.email}!`)
-      setTimeout(() => setSuccess(''), 3000)
+      
+      // Check if test user was created
+      if (response.testUser) {
+        setSuccess(`Invitation sent to ${response.email}! Test user account created with credentials: Email: ${response.testUser.credentials.email}, Password: ${response.testUser.credentials.password}`)
+      } else {
+        setSuccess(`Invitation sent to ${response.email}!`)
+      }
+      setTimeout(() => setSuccess(''), 5000) // Longer timeout to read test credentials
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to send invitation')
     }
@@ -202,6 +219,20 @@ export default function Family() {
       setTimeout(() => setSuccess(''), 3000)
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to cancel invitation')
+    }
+  }
+
+  const handleDeleteTestUser = async (userId: string) => {
+    if (!confirm('Are you sure you want to delete this test user?')) return
+
+    try {
+      setError('')
+      await familyAPI.deleteTestUser(userId)
+      await loadTestUsers()
+      setSuccess('Test user deleted successfully!')
+      setTimeout(() => setSuccess(''), 3000)
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to delete test user')
     }
   }
 
@@ -479,6 +510,77 @@ export default function Family() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Development Section - Test Users Management */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h3 className="text-lg font-medium text-yellow-900">🧪 Development Tools</h3>
+              <p className="text-sm text-yellow-700">Test user management for invitation testing</p>
+            </div>
+            <div className="flex space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setShowTestUsers(!showTestUsers)
+                  if (!showTestUsers) {
+                    loadTestUsers()
+                  }
+                }}
+                className="border-yellow-300 text-yellow-700 hover:bg-yellow-100"
+              >
+                {showTestUsers ? 'Hide' : 'Show'} Test Users
+              </Button>
+            </div>
+          </div>
+
+          {showTestUsers && (
+            <div className="space-y-4">
+              <div className="bg-white rounded-lg p-4 border border-yellow-200">
+                <h4 className="font-medium text-gray-900 mb-3">Test Users ({testUsers.length})</h4>
+                <p className="text-sm text-gray-600 mb-4">
+                  These are test accounts created for invitation testing. All test users have password: <code className="bg-gray-100 px-1 rounded">test123456</code>
+                </p>
+                
+                {testUsers.length > 0 ? (
+                  <div className="space-y-3">
+                    {testUsers.map((user) => (
+                      <div
+                        key={user.id}
+                        className="flex items-center justify-between p-3 border border-gray-200 rounded-lg bg-gray-50"
+                      >
+                        <div>
+                          <p className="font-medium text-gray-900">
+                            {user.first_name} {user.last_name}
+                          </p>
+                          <p className="text-sm text-gray-500">{user.email}</p>
+                          <p className="text-xs text-gray-400">
+                            Created {new Date(user.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDeleteTestUser(user.id)}
+                            className="text-red-600 border-red-300 hover:bg-red-50"
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-gray-500">No test users found</p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

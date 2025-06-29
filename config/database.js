@@ -12,6 +12,8 @@ const pool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
+  // Set timezone to UTC to avoid timezone conversion issues
+  options: '-c timezone=utc'
 });
 
 // Test the connection

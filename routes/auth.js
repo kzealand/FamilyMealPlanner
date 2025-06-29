@@ -12,7 +12,7 @@ const registerSchema = Joi.object({
   password: Joi.string().min(8).required(),
   first_name: Joi.string().min(1).max(100).required(),
   last_name: Joi.string().min(1).max(100).required(),
-  birthday: Joi.date().optional(),
+  birthday: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).optional(),
   dietary_restrictions: Joi.array().items(Joi.string()).optional(),
   nutrition_targets: Joi.object().optional(),
   favorite_foods: Joi.array().items(Joi.string()).optional()
@@ -24,13 +24,18 @@ const loginSchema = Joi.object({
 });
 
 const updateProfileSchema = Joi.object({
-  first_name: Joi.string().min(1).max(100).optional(),
-  last_name: Joi.string().min(1).max(100).optional(),
-  birthday: Joi.date().optional(),
-  dietary_restrictions: Joi.array().items(Joi.string()).optional(),
-  nutrition_targets: Joi.object().optional(),
-  favorite_foods: Joi.array().items(Joi.string()).optional(),
-  profile_image_url: Joi.string().uri().optional()
+  first_name: Joi.string().min(1).max(100).allow('', null).optional(),
+  last_name: Joi.string().min(1).max(100).allow('', null).optional(),
+  birthday: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).allow('', null).optional(),
+  dietary_restrictions: Joi.array().items(Joi.string()).allow(null).optional(),
+  nutrition_targets: Joi.object().allow(null).optional(),
+  favorite_foods: Joi.array().items(Joi.string()).allow(null).optional(),
+  profile_image_url: Joi.string().uri().allow('', null).optional()
+});
+
+const changePasswordSchema = Joi.object({
+  current_password: Joi.string().required(),
+  new_password: Joi.string().min(8).required()
 });
 
 // Register new user
@@ -64,18 +69,27 @@ router.post('/register', async (req, res) => {
     const user = result.rows[0];
     const token = generateToken(user.id);
 
+    // Convert birthday to consistent format (YYYY-MM-DD) to avoid timezone issues
+    const formattedUser = {
+      id: user.id,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      birthday: user.birthday ? (() => {
+        const date = new Date(user.birthday);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      })() : null,
+      dietary_restrictions: user.dietary_restrictions,
+      nutrition_targets: user.nutrition_targets,
+      favorite_foods: user.favorite_foods
+    };
+
     res.status(201).json({
       message: 'User registered successfully',
-      user: {
-        id: user.id,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        birthday: user.birthday,
-        dietary_restrictions: user.dietary_restrictions,
-        nutrition_targets: user.nutrition_targets,
-        favorite_foods: user.favorite_foods
-      },
+      user: formattedUser,
       token
     });
   } catch (error) {
@@ -114,18 +128,27 @@ router.post('/login', async (req, res) => {
 
     const token = generateToken(user.id);
 
+    // Convert birthday to consistent format (YYYY-MM-DD) to avoid timezone issues
+    const formattedUser = {
+      id: user.id,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      birthday: user.birthday ? (() => {
+        const date = new Date(user.birthday);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      })() : null,
+      dietary_restrictions: user.dietary_restrictions,
+      nutrition_targets: user.nutrition_targets,
+      favorite_foods: user.favorite_foods
+    };
+
     res.json({
       message: 'Login successful',
-      user: {
-        id: user.id,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        birthday: user.birthday,
-        dietary_restrictions: user.dietary_restrictions,
-        nutrition_targets: user.nutrition_targets,
-        favorite_foods: user.favorite_foods
-      },
+      user: formattedUser,
       token
     });
   } catch (error) {
@@ -146,7 +169,18 @@ router.get('/profile', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json({ user: result.rows[0] });
+    const user = result.rows[0];
+    
+    // Convert birthday to consistent format (YYYY-MM-DD) to avoid timezone issues
+    if (user.birthday) {
+      const date = new Date(user.birthday);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      user.birthday = `${year}-${month}-${day}`;
+    }
+
+    res.json({ user });
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -156,10 +190,13 @@ router.get('/profile', authenticateToken, async (req, res) => {
 // Update user profile
 router.put('/profile', authenticateToken, async (req, res) => {
   try {
+    console.log('Profile update request body:', req.body);
     const { error, value } = updateProfileSchema.validate(req.body);
     if (error) {
+      console.log('Validation error:', error.details[0].message);
       return res.status(400).json({ error: error.details[0].message });
     }
+    console.log('Validated data:', value);
 
     const updateFields = [];
     const updateValues = [];
@@ -168,8 +205,30 @@ router.put('/profile', authenticateToken, async (req, res) => {
     // Build dynamic update query
     Object.keys(value).forEach(key => {
       if (value[key] !== undefined) {
+        // Convert empty strings to null for database
+        let fieldValue = value[key] === '' ? null : value[key];
+        
+        // Convert birthday string to Date object if it's a valid date string
+        if (key === 'birthday' && fieldValue && typeof fieldValue === 'string') {
+          console.log('Processing birthday field:', fieldValue);
+          try {
+            // Validate the date format (YYYY-MM-DD)
+            const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+            if (!dateRegex.test(fieldValue)) {
+              console.log('Invalid date format, setting to null');
+              fieldValue = null;
+            } else {
+              // Keep as string to avoid timezone conversion
+              console.log('Valid date format, keeping as string:', fieldValue);
+            }
+          } catch (error) {
+            console.log('Error processing birthday:', error);
+            fieldValue = null;
+          }
+        }
+        
         updateFields.push(`${key} = $${paramCount}`);
-        updateValues.push(value[key]);
+        updateValues.push(fieldValue);
         paramCount++;
       }
     });
@@ -186,18 +245,87 @@ router.put('/profile', authenticateToken, async (req, res) => {
       RETURNING id, email, first_name, last_name, profile_image_url, birthday, dietary_restrictions, nutrition_targets, favorite_foods, updated_at
     `;
 
+    console.log('Update query:', query);
+    console.log('Update values:', updateValues);
+
     const result = await db.query(query, updateValues);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    const updatedUser = result.rows[0];
+    
+    console.log('Raw database result birthday:', updatedUser.birthday);
+    console.log('Raw database result birthday type:', typeof updatedUser.birthday);
+    
+    // Convert birthday to consistent format (YYYY-MM-DD) to avoid timezone issues
+    if (updatedUser.birthday) {
+      // If it's already a string in YYYY-MM-DD format, use it directly
+      if (typeof updatedUser.birthday === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(updatedUser.birthday)) {
+        console.log('Birthday is already in correct string format:', updatedUser.birthday);
+      } else {
+        // If it's a Date object, format it properly
+        const date = new Date(updatedUser.birthday);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        updatedUser.birthday = `${year}-${month}-${day}`;
+        console.log('Formatted birthday from Date object:', updatedUser.birthday);
+      }
+    }
+
     res.json({
       message: 'Profile updated successfully',
-      user: result.rows[0]
+      user: updatedUser
     });
   } catch (error) {
     console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Change password
+router.put('/change-password', authenticateToken, async (req, res) => {
+  try {
+    const { error, value } = changePasswordSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
+    }
+
+    const { current_password, new_password } = value;
+
+    // Get current user with password hash
+    const userResult = await db.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userResult.rows[0];
+
+    // Verify current password
+    const isValidCurrentPassword = await bcrypt.compare(current_password, user.password_hash);
+    if (!isValidCurrentPassword) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    // Hash new password
+    const saltRounds = 12;
+    const newPasswordHash = await bcrypt.hash(new_password, saltRounds);
+
+    // Update password
+    await db.query(
+      'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newPasswordHash, req.user.id]
+    );
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
