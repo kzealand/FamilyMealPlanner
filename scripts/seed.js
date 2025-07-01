@@ -224,15 +224,55 @@ async function seedDatabase() {
     );
     console.log('✅ Added favorite recipes');
     
+    // Create meal plans for the week of June 29th, 2025
+    console.log('📅 Creating meal plans for the week of June 29th...');
+    const weekStartDate = '2025-06-29';
+    
+    // Get meal slot IDs
+    const mealSlotsResult = await db.query('SELECT id, name FROM meal_slots ORDER BY display_order');
+    
+    // Create meal plans for each family member
+    for (const user of createdUsers) {
+      const mealPlanResult = await db.query(
+        'INSERT INTO meal_plans (user_id, week_start_date) VALUES ($1, $2) RETURNING id',
+        [user.id, weekStartDate]
+      );
+      const mealPlanId = mealPlanResult.rows[0].id;
+      
+      // Add some meals to the meal plan
+      const mealSlots = [
+        { meal_slot_name: 'breakfast', recipe_id: createdRecipes[2].id, day_of_week: 0 }, // Scrambled Eggs
+        { meal_slot_name: 'lunch', recipe_id: createdRecipes[0].id, day_of_week: 1 },     // Grilled Chicken
+        { meal_slot_name: 'dinner', recipe_id: createdRecipes[1].id, day_of_week: 2 }     // Spaghetti Bolognese
+      ];
+      
+      for (const meal of mealSlots) {
+        const mealSlotId = mealSlotsResult.rows.find(slot => slot.name === meal.meal_slot_name)?.id;
+        if (mealSlotId) {
+          await db.query(
+            'INSERT INTO meal_plan_items (meal_plan_id, meal_slot_id, recipe_id, day_of_week) VALUES ($1, $2, $3, $4)',
+            [mealPlanId, mealSlotId, meal.recipe_id, meal.day_of_week]
+          );
+        }
+      }
+      
+      console.log(`✅ Created meal plan for ${user.first_name} ${user.last_name}`);
+    }
+    
     console.log('🎉 Database seeding completed successfully!');
     console.log('\n📋 Sample Data Summary:');
     console.log(`- Users: ${createdUsers.length}`);
     console.log(`- Families: 2`);
     console.log(`- Ingredients: ${createdIngredients.length}`);
     console.log(`- Recipes: ${createdRecipes.length}`);
+    console.log(`- Meal Plans: ${createdUsers.length} (for week of ${weekStartDate})`);
     console.log('\n🔑 Sample Login Credentials:');
     console.log('Email: john.doe@example.com');
     console.log('Password: password123');
+    console.log('\n🛒 Test Shopping List:');
+    console.log(`- Login as any user and go to Shopping List`);
+    console.log(`- Generate shopping list for week starting ${weekStartDate}`);
+    console.log(`- Should include ingredients from all family members' meal plans`);
     
   } catch (error) {
     console.error('💥 Seeding failed:', error);

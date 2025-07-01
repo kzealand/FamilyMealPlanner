@@ -10,6 +10,7 @@
     "setup": "node setup.js",
     "db:migrate": "node scripts/migrate.js",
     "db:seed": "node scripts/seed.js",
+    "db:add-meal-plans": "node scripts/add_meal_plans.js",
     "db:drop": "node scripts/drop.js"
   },
   "dependencies": {

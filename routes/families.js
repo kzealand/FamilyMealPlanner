@@ -128,6 +128,10 @@ router.get('/', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
 
+    console.log('GET /families - Request details:');
+    console.log('  User ID:', userId);
+    console.log('  User:', req.user);
+
     const result = await db.query(
       `SELECT f.id, f.name, f.description, f.created_at, fm.role
        FROM families f
@@ -137,7 +141,15 @@ router.get('/', authenticateToken, async (req, res) => {
       [userId]
     );
 
-    res.json({ families: result.rows });
+    console.log(`  📊 Found ${result.rows.length} families for user:`);
+    result.rows.forEach((family, index) => {
+      console.log(`    ${index + 1}. ${family.name} (${family.role})`);
+    });
+
+    const response = { families: result.rows };
+    console.log('  📤 Sending response:', response);
+
+    res.json(response);
   } catch (error) {
     console.error('Get families error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -148,6 +160,12 @@ router.get('/', authenticateToken, async (req, res) => {
 router.get('/:familyId', authenticateToken, requireFamilyAccess, async (req, res) => {
   try {
     const { familyId } = req.params;
+    const userId = req.user.id;
+
+    console.log('GET /families/:familyId - Request details:');
+    console.log('  Family ID:', familyId);
+    console.log('  User ID:', userId);
+    console.log('  User:', req.user);
 
     const familyResult = await db.query(
       'SELECT id, name, description, created_at FROM families WHERE id = $1',
@@ -155,10 +173,12 @@ router.get('/:familyId', authenticateToken, requireFamilyAccess, async (req, res
     );
 
     if (familyResult.rows.length === 0) {
+      console.log('  ❌ Family not found');
       return res.status(404).json({ error: 'Family not found' });
     }
 
     const family = familyResult.rows[0];
+    console.log('  ✅ Family found:', family.name);
 
     // Get family members
     const membersResult = await db.query(
@@ -170,13 +190,19 @@ router.get('/:familyId', authenticateToken, requireFamilyAccess, async (req, res
       [familyId]
     );
 
-    // Debug log
-    console.log('Family details response:', { family, members: membersResult.rows });
+    console.log(`  📊 Found ${membersResult.rows.length} family members:`);
+    membersResult.rows.forEach((member, index) => {
+      console.log(`    ${index + 1}. ${member.first_name} ${member.last_name} (${member.email}) - ${member.role}`);
+    });
 
-    res.json({
+    const response = {
       family,
       members: membersResult.rows
-    });
+    };
+
+    console.log('  📤 Sending response:', response);
+
+    res.json(response);
   } catch (error) {
     console.error('Get family details error:', error);
     res.status(500).json({ error: 'Internal server error' });

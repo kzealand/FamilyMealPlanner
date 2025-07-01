@@ -20,6 +20,11 @@ interface RegisterFormData {
   favorite_foods: string[]
 }
 
+interface RegisterProps {
+  prefillEmail?: string
+  disableEmail?: boolean
+}
+
 const dietaryOptions = [
   'Vegetarian',
   'Vegan',
@@ -34,10 +39,10 @@ const dietaryOptions = [
   'Kosher'
 ]
 
-export default function Register() {
+export default function Register({ prefillEmail, disableEmail }: RegisterProps) {
   const navigate = useNavigate()
   const [formData, setFormData] = useState<RegisterFormData>({
-    email: '',
+    email: prefillEmail || '',
     password: '',
     confirmPassword: '',
     first_name: '',
@@ -219,10 +224,12 @@ export default function Register() {
                 id="email"
                 name="email"
                 type="email"
+                autoComplete="email"
                 required
                 value={formData.email}
                 onChange={handleInputChange}
                 className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                disabled={disableEmail}
               />
             </div>
 

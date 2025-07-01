@@ -26,6 +26,7 @@ export default function Family() {
   const [invitations, setInvitations] = useState<any[]>([])
   const [testUsers, setTestUsers] = useState<any[]>([])
   const [showTestUsers, setShowTestUsers] = useState(false)
+  const [lastInvitation, setLastInvitation] = useState<any>(null)
 
   useEffect(() => {
     loadFamilies()
@@ -37,7 +38,8 @@ export default function Family() {
       const familiesData = await familyAPI.getAll()
       setFamilies(familiesData)
       if (familiesData.length > 0 && !selectedFamily) {
-        setSelectedFamily(familiesData[0])
+        // Load the first family's details to get members
+        await loadFamilyDetails(familiesData[0].id)
       }
     } catch (err) {
       setError('Failed to load families')
@@ -193,12 +195,12 @@ export default function Family() {
       setShowInviteForm(false)
       setInviteData({ email: '', role: 'member', message: '' })
       await loadInvitations(selectedFamily.id)
-      
+      setLastInvitation(response)
       // Check if test user was created
       if (response.testUser) {
-        setSuccess(`Invitation sent to ${response.email}! Test user account created with credentials: Email: ${response.testUser.credentials.email}, Password: ${response.testUser.credentials.password}`)
+        setSuccess(`Invitation sent to ${response.invitation.email}! Test user account created with credentials: Email: ${response.testUser.credentials.email}, Password: ${response.testUser.credentials.password}`)
       } else {
-        setSuccess(`Invitation sent to ${response.email}!`)
+        setSuccess(`Invitation sent to ${response.invitation.email}!`)
       }
       setTimeout(() => setSuccess(''), 5000) // Longer timeout to read test credentials
     } catch (err: any) {
@@ -281,6 +283,24 @@ export default function Family() {
         </div>
       )}
 
+      {lastInvitation && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-900 px-4 py-3 rounded my-4">
+          <div className="mb-2 font-semibold">Invitation Link:</div>
+          <div className="mb-2">
+            <a href={lastInvitation.invitation.invitation_url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline break-all">
+              {lastInvitation.invitation.invitation_url}
+            </a>
+          </div>
+          {lastInvitation.testUser && (
+            <div className="mt-2">
+              <div className="font-semibold">Test User Credentials (development only):</div>
+              <div>Email: <span className="font-mono">{lastInvitation.testUser.credentials.email}</span></div>
+              <div>Password: <span className="font-mono">{lastInvitation.testUser.credentials.password}</span></div>
+            </div>
+          )}
+        </div>
+      )}
+
       {families.length === 0 ? (
         <div className="bg-white shadow rounded-lg p-6 text-center">
           <h3 className="text-lg font-medium text-gray-900 mb-2">No families yet</h3>
@@ -304,7 +324,7 @@ export default function Family() {
                     className={`px-6 py-4 cursor-pointer hover:bg-gray-50 ${
                       selectedFamily?.id === family.id ? 'bg-blue-50 border-r-2 border-blue-500' : ''
                     }`}
-                    onClick={() => setSelectedFamily(family)}
+                    onClick={() => loadFamilyDetails(family.id)}
                   >
                     <h4 className="font-medium text-gray-900">{family.name}</h4>
                     {family.description && (

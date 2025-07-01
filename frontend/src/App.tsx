@@ -10,6 +10,7 @@ import MealPlanner from '@/pages/MealPlanner'
 import ShoppingList from '@/pages/ShoppingList'
 import Family from '@/pages/Family'
 import Profile from '@/pages/Profile'
+import InviteAcceptPage from '@/pages/InviteAcceptPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -34,6 +35,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/invite/:token" element={<InviteAcceptPage />} />
       <Route path="/" element={
         <ProtectedRoute>
           <Layout />

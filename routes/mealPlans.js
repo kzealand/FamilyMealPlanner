@@ -2,12 +2,16 @@ const express = require('express');
 const Joi = require('joi');
 const db = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const { normalizeDate, isValidDateString } = require('../utils/dateUtils');
 
 const router = express.Router();
 
 // Validation schemas
 const createMealPlanSchema = Joi.object({
-  week_start_date: Joi.date().required(),
+  week_start_date: Joi.alternatives().try(
+    Joi.date(),
+    Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/)
+  ).required(),
   meals: Joi.array().items(Joi.object({
     day_of_week: Joi.number().integer().min(0).max(6).required(),
     meal_slot_name: Joi.string().valid('breakfast', 'am_snack', 'lunch', 'pm_snack', 'dinner', 'dessert').required(),
@@ -39,16 +43,16 @@ router.post('/', authenticateToken, async (req, res) => {
     const { week_start_date, meals } = value;
     console.log('POST /meal-plans:', { received_week_start_date: week_start_date });
 
+    // Normalize the date to YYYY-MM-DD format
+    const normalizedWeekStartDate = normalizeDate(week_start_date);
+    console.log('Normalized week_start_date:', normalizedWeekStartDate);
+
     // Check if meal plan already exists for this week
-    console.log('Looking for existing meal plan with user_id:', userId, 'week_start_date:', week_start_date);
-    
-    // Convert the date to YYYY-MM-DD format for database comparison
-    const weekStartDateStr = week_start_date.toISOString().split('T')[0];
-    console.log('Converted week_start_date to string:', weekStartDateStr);
+    console.log('Looking for existing meal plan with user_id:', userId, 'week_start_date:', normalizedWeekStartDate);
     
     const existingPlan = await db.query(
-      'SELECT id FROM meal_plans WHERE user_id = $1 AND week_start_date::date = $2::date',
-      [userId, weekStartDateStr]
+      'SELECT id FROM meal_plans WHERE user_id = $1 AND week_start_date = $2',
+      [userId, normalizedWeekStartDate]
     );
     console.log('Existing plan query result:', existingPlan.rows);
 
@@ -68,7 +72,7 @@ router.post('/', authenticateToken, async (req, res) => {
       try {
         const result = await db.query(
           'INSERT INTO meal_plans (user_id, week_start_date) VALUES ($1, $2) RETURNING id',
-          [userId, weekStartDateStr] // Use the string date instead of the Date object
+          [userId, normalizedWeekStartDate]
         );
         mealPlanId = result.rows[0].id;
         console.log('Created new meal plan with ID:', mealPlanId);
@@ -152,10 +156,15 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'week_start_date parameter is required' });
     }
 
+    // Normalize the date to YYYY-MM-DD format
+    const normalizedWeekStartDate = normalizeDate(week_start_date);
+    console.log('GET meal plan - Original date:', week_start_date);
+    console.log('GET meal plan - Normalized date:', normalizedWeekStartDate);
+
     // Get meal plan
     const planResult = await db.query(
       'SELECT id FROM meal_plans WHERE user_id = $1 AND week_start_date = $2',
-      [userId, week_start_date]
+      [userId, normalizedWeekStartDate]
     );
 
     if (planResult.rows.length === 0) {
@@ -182,10 +191,15 @@ router.delete('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'week_start_date parameter is required' });
     }
 
+    // Normalize the date to YYYY-MM-DD format
+    const normalizedWeekStartDate = normalizeDate(week_start_date);
+    console.log('DELETE meal plan - Original date:', week_start_date);
+    console.log('DELETE meal plan - Normalized date:', normalizedWeekStartDate);
+
     // Delete meal plan
     const result = await db.query(
       'DELETE FROM meal_plans WHERE user_id = $1 AND week_start_date = $2 RETURNING id',
-      [userId, week_start_date]
+      [userId, normalizedWeekStartDate]
     );
 
     if (result.rows.length === 0) {

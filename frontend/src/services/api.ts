@@ -144,6 +144,10 @@ export const familyAPI = {
   deleteTestUser: async (userId: string) => {
     await api.delete(`/families/test-users/${userId}`)
   },
+
+  getInvitation: async (token: string) => {
+    return { invitation: await familyAPI.getInvitationDetails(token) }
+  },
 }
 
 // Recipe API

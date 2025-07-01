@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChefHat, Calendar, ShoppingCart, Users } from 'lucide-react'
-import { recipeAPI, familyAPI } from '@/services/api'
+import { recipeAPI, familyAPI, shoppingListAPI } from '@/services/api'
 import { useAuth } from '@/contexts/AuthContext'
 
 interface DashboardStats {
@@ -33,36 +33,66 @@ export default function Dashboard() {
         // Fetch user's families first
         const families = await familyAPI.getAll()
         console.log('Families fetched:', families)
-        const userFamilies = families.filter((family: any) => 
-          family.members.some((member: any) => member.user_id === user?.id)
-        )
-        console.log('User families:', userFamilies)
+        
+        // Since families from getAll() don't include members, we need to fetch details for each family
+        const userFamilies = []
+        let totalFamilyMembers = 0
+        
+        for (const family of families) {
+          try {
+            const { family: familyDetails, members } = await familyAPI.getById(family.id)
+            console.log(`Family details for ${family.name}:`, { family: familyDetails, members })
+            
+            // Check if current user is a member of this family
+            const isUserMember = members.some((member: any) => member.id === user?.id)
+            if (isUserMember) {
+              userFamilies.push({ ...family, members })
+              totalFamilyMembers += members.length
+            }
+          } catch (error) {
+            console.error(`Error fetching details for family ${family.id}:`, error)
+          }
+        }
+        
+        console.log('User families with members:', userFamilies)
         
         // Fetch recipes for all user's families
         let totalRecipes = 0
+        let totalShoppingItems = 0
+        
         for (const family of userFamilies) {
           try {
             const recipes = await recipeAPI.getAll(family.id)
             console.log(`Recipes for family ${family.id}:`, recipes)
             totalRecipes += recipes.length
+            
+            // Fetch shopping lists for this family
+            try {
+              const shoppingLists = await shoppingListAPI.getAll(family.id)
+              console.log(`Shopping lists for family ${family.id}:`, shoppingLists)
+              
+              // Sum up all items from all shopping lists
+              for (const list of shoppingLists) {
+                totalShoppingItems += list.item_count || 0
+              }
+            } catch (error) {
+              console.error(`Error fetching shopping lists for family ${family.id}:`, error)
+            }
           } catch (error) {
             console.error(`Error fetching recipes for family ${family.id}:`, error)
           }
         }
 
-        const familyMembers = userFamilies.reduce((total: number, family: any) => 
-          total + family.members.length, 0
-        )
+        const familyMembers = totalFamilyMembers
 
-        // For now, use placeholder data for meals and shopping items
-        // These would be implemented with actual API endpoints
-        const weeklyMeals = 0 // TODO: Implement meal plans API
-        const shoppingItems = 0 // TODO: Implement shopping list API
+        // For now, use placeholder data for meals
+        // TODO: Implement meal plans API to get actual weekly meal count
+        const weeklyMeals = 0
 
         const newStats = {
           totalRecipes,
           weeklyMeals,
-          shoppingItems,
+          shoppingItems: totalShoppingItems,
           familyMembers
         }
         console.log('Setting stats:', newStats)

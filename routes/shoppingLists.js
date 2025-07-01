@@ -2,12 +2,16 @@ const express = require('express');
 const Joi = require('joi');
 const db = require('../config/database');
 const { authenticateToken, requireFamilyAccess } = require('../middleware/auth');
+const { normalizeDate, isValidDateString } = require('../utils/dateUtils');
 
 const router = express.Router();
 
 // Validation schemas
 const generateShoppingListSchema = Joi.object({
-  week_start_date: Joi.date().required()
+  week_start_date: Joi.alternatives().try(
+    Joi.date(),
+    Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/)
+  ).required()
 });
 
 const updateShoppingListItemSchema = Joi.object({
@@ -26,10 +30,15 @@ router.post('/:familyId/generate', authenticateToken, requireFamilyAccess, async
     const { familyId } = req.params;
     const { week_start_date } = value;
 
+    // Normalize the date to YYYY-MM-DD format
+    const normalizedWeekStartDate = normalizeDate(week_start_date);
+    console.log('Shopping list generation - Original date:', week_start_date);
+    console.log('Shopping list generation - Normalized date:', normalizedWeekStartDate);
+
     // Check if shopping list already exists for this week
     const existingList = await db.query(
       'SELECT id FROM shopping_lists WHERE family_id = $1 AND week_start_date = $2',
-      [familyId, week_start_date]
+      [familyId, normalizedWeekStartDate]
     );
 
     if (existingList.rows.length > 0) {
@@ -37,10 +46,28 @@ router.post('/:familyId/generate', authenticateToken, requireFamilyAccess, async
     }
 
     // Get all meal plans for the family for the specified week
-    const mealPlansResult = await db.query(
-      'SELECT id FROM meal_plans WHERE family_id = $1 AND week_start_date = $2',
-      [familyId, week_start_date]
+    // First, get all family members
+    const familyMembersResult = await db.query(
+      'SELECT user_id FROM family_members WHERE family_id = $1',
+      [familyId]
     );
+
+    console.log('Family members found:', familyMembersResult.rows);
+
+    if (familyMembersResult.rows.length === 0) {
+      return res.status(400).json({ error: 'No family members found' });
+    }
+
+    const familyMemberIds = familyMembersResult.rows.map(row => row.user_id);
+    console.log('Family member IDs:', familyMemberIds);
+
+    // Get all meal plans for family members for the specified week
+    const mealPlansResult = await db.query(
+      'SELECT id FROM meal_plans WHERE user_id = ANY($1) AND week_start_date = $2',
+      [familyMemberIds, normalizedWeekStartDate]
+    );
+
+    console.log('Meal plans found:', mealPlansResult.rows);
 
     if (mealPlansResult.rows.length === 0) {
       return res.status(400).json({ error: 'No meal plans found for this week' });
@@ -49,7 +76,7 @@ router.post('/:familyId/generate', authenticateToken, requireFamilyAccess, async
     // Create shopping list
     const shoppingListResult = await db.query(
       'INSERT INTO shopping_lists (family_id, week_start_date) VALUES ($1, $2) RETURNING id',
-      [familyId, week_start_date]
+      [familyId, normalizedWeekStartDate]
     );
 
     const shoppingListId = shoppingListResult.rows[0].id;
@@ -59,15 +86,19 @@ router.post('/:familyId/generate', authenticateToken, requireFamilyAccess, async
 
     for (const mealPlan of mealPlansResult.rows) {
       const mealPlanId = mealPlan.id;
+      console.log('Processing meal plan ID:', mealPlanId);
 
       // Get all meals with recipes for this meal plan
       const mealsResult = await db.query(
-        `SELECT mpi.recipe_id, ri.ingredient_id, ri.quantity, ri.unit, ri.notes
+        `SELECT mpi.recipe_id, r.name as recipe_name, ri.ingredient_id, ri.quantity, ri.unit, ri.notes
          FROM meal_plan_items mpi
          JOIN recipe_ingredients ri ON mpi.recipe_id = ri.recipe_id
+         JOIN recipes r ON mpi.recipe_id = r.id
          WHERE mpi.meal_plan_id = $1 AND mpi.recipe_id IS NOT NULL`,
         [mealPlanId]
       );
+
+      console.log('Recipes found for meal plan:', mealsResult.rows);
 
       // Aggregate ingredients
       for (const meal of mealsResult.rows) {
@@ -76,6 +107,10 @@ router.post('/:familyId/generate', authenticateToken, requireFamilyAccess, async
         if (ingredientsMap.has(key)) {
           const existing = ingredientsMap.get(key);
           existing.quantity += parseFloat(meal.quantity);
+          // Add recipe name to the list of recipes
+          if (!existing.recipes.includes(meal.recipe_name)) {
+            existing.recipes.push(meal.recipe_name);
+          }
           if (meal.notes && !existing.notes.includes(meal.notes)) {
             existing.notes = existing.notes ? `${existing.notes}; ${meal.notes}` : meal.notes;
           }
@@ -84,7 +119,8 @@ router.post('/:familyId/generate', authenticateToken, requireFamilyAccess, async
             ingredient_id: meal.ingredient_id,
             quantity: parseFloat(meal.quantity),
             unit: meal.unit,
-            notes: meal.notes
+            notes: meal.notes,
+            recipes: [meal.recipe_name]
           });
         }
       }
@@ -92,9 +128,14 @@ router.post('/:familyId/generate', authenticateToken, requireFamilyAccess, async
 
     // Insert shopping list items
     for (const [key, ingredient] of ingredientsMap) {
+      // Create notes that include recipe information
+      let notes = ingredient.notes || '';
+      const recipeInfo = `From recipes: ${ingredient.recipes.join(', ')}`;
+      const finalNotes = notes ? `${notes} | ${recipeInfo}` : recipeInfo;
+      
       await db.query(
         'INSERT INTO shopping_list_items (shopping_list_id, ingredient_id, total_quantity, unit, notes) VALUES ($1, $2, $3, $4, $5)',
-        [shoppingListId, ingredient.ingredient_id, ingredient.quantity, ingredient.unit, ingredient.notes]
+        [shoppingListId, ingredient.ingredient_id, ingredient.quantity, ingredient.unit, finalNotes]
       );
     }
 
@@ -121,10 +162,15 @@ router.get('/:familyId', authenticateToken, requireFamilyAccess, async (req, res
       return res.status(400).json({ error: 'week_start_date parameter is required' });
     }
 
+    // Normalize the date to YYYY-MM-DD format
+    const normalizedWeekStartDate = normalizeDate(week_start_date);
+    console.log('Get shopping list - Original date:', week_start_date);
+    console.log('Get shopping list - Normalized date:', normalizedWeekStartDate);
+
     // Get shopping list
     const listResult = await db.query(
       'SELECT id FROM shopping_lists WHERE family_id = $1 AND week_start_date = $2',
-      [familyId, week_start_date]
+      [familyId, normalizedWeekStartDate]
     );
 
     if (listResult.rows.length === 0) {
